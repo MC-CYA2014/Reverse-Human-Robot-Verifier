@@ -16,6 +16,10 @@
 start .\index.html
 ```
 
+### 在线体验
+直接打开：<https://mc-cya2014.github.io/Reverse-Human-Robot-Verifier/>
+
+
 无需 Node、无需构建、无需联网。
 
 ---
