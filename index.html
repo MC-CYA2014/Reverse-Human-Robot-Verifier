@@ -1,0 +1,1579 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>反向人机验证器 · Reverse Human Robot Verifier</title>
+<style>
+  /* =========================================================
+     反向人机验证器 / Reverse Human Robot Verifier
+     - 单文件、零依赖、零网络请求
+     - 设计意图：这是一个「想让你证明自己是机器」的验证码
+     ========================================================= */
+  :root{
+    --bg:#04060c;
+    --paper:#f8fafd;
+    --paper-2:#eef2f9;
+    --ink:#0e1420;
+    --ink-soft:#2a3446;
+    --line:#dfe5ef;
+    --line-2:#cbd4e3;
+    --muted:#6b7689;
+    --muted-2:#94a0b4;
+    --cyan:#22d3ee;
+    --magenta:#f472b6;
+    --lime:#a3e635;
+    --green:#10b981;
+    --red:#ef4444;
+    --amber:#f59e0b;
+    --mono:ui-monospace,SFMono-Regular,"Cascadia Mono","Roboto Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Hiragino Sans GB",sans-serif;
+  }
+  *{box-sizing:border-box}
+  [hidden]{display:none!important}
+  html,body{min-height:100%}
+  body{
+    margin:0;
+    min-height:100vh;
+    padding:34px 16px 30px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:20px;
+    background:var(--bg);
+    color:#e7eefa;
+    font-family:var(--sans);
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  /* 背景：网格 + 赛博朋克光晕 */
+  body::before{
+    content:"";
+    position:fixed; inset:0; z-index:0; pointer-events:none;
+    background:
+      radial-gradient(820px 520px at 12% -6%, rgba(34,211,238,.17), transparent 62%),
+      radial-gradient(760px 540px at 92% 104%, rgba(244,114,182,.15), transparent 64%),
+      radial-gradient(620px 420px at 52% 48%, rgba(99,102,241,.10), transparent 70%);
+  }
+  body::after{
+    content:"";
+    position:fixed; inset:0; z-index:0; pointer-events:none; opacity:.5;
+    background-image:
+      linear-gradient(rgba(148,163,184,.055) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(148,163,184,.055) 1px, transparent 1px);
+    background-size:46px 46px;
+    -webkit-mask-image:radial-gradient(circle at 50% 42%, #000 32%, transparent 76%);
+    mask-image:radial-gradient(circle at 50% 42%, #000 32%, transparent 76%);
+  }
+  ::selection{background:rgba(34,211,238,.28)}
+
+  .stage{position:relative; z-index:1; width:min(556px,100%);}
+
+  /* ---------- 卡片上方的检查点标识 ---------- */
+  .kicker{
+    display:flex; align-items:center; gap:8px;
+    margin:0 0 12px 2px;
+    color:#8aa0bd;
+    font:10px/1 var(--mono);
+    letter-spacing:.22em;
+    text-transform:uppercase;
+  }
+  .kicker .dot{
+    width:6px; height:6px; border-radius:50%;
+    background:var(--lime);
+    box-shadow:0 0 12px rgba(163,230,53,.9);
+    animation:blink 2.4s ease-in-out infinite;
+  }
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.28}}
+
+  /* ---------- 主卡片 ---------- */
+  .card{
+    position:relative;
+    overflow:hidden;
+    width:100%;
+    padding:22px 22px 18px;
+    border-radius:20px;
+    border:1px solid var(--line);
+    background:linear-gradient(178deg, rgba(255,255,255,.97), rgba(244,247,252,.93));
+    box-shadow:
+      0 34px 90px -30px rgba(0,0,0,.95),
+      0 2px 0 rgba(255,255,255,.9) inset,
+      0 0 0 1px rgba(255,255,255,.35);
+    -webkit-backdrop-filter:blur(20px) saturate(140%);
+    backdrop-filter:blur(20px) saturate(140%);
+    transition:box-shadow .32s ease, border-color .32s ease;
+    color:var(--ink);
+  }
+  /* 悬浮阴影：专业感来源之一 */
+  .card:hover{
+    box-shadow:
+      0 44px 110px -30px rgba(0,0,0,1),
+      0 0 0 1px rgba(34,211,238,.30),
+      0 2px 0 rgba(255,255,255,.9) inset;
+    border-color:#cdd9ea;
+  }
+  .card.is-scanning{border-color:rgba(34,211,238,.55)}
+  .card.pass{border-color:rgba(16,185,129,.55)}
+  .card.fail{border-color:rgba(239,68,68,.45)}
+
+  /* 扫描光束：贯穿整张卡片 */
+  .beam{
+    position:absolute; left:0; right:0; top:-120px; height:110px;
+    pointer-events:none; opacity:0;
+    background:linear-gradient(180deg,
+      rgba(34,211,238,0),
+      rgba(34,211,238,.20) 55%,
+      rgba(244,114,182,.10) 82%,
+      rgba(34,211,238,0));
+  }
+  .card.is-scanning .beam{
+    opacity:1;
+    animation:beamSweep 1.5s cubic-bezier(.45,0,.2,1) both;
+  }
+  @keyframes beamSweep{from{top:-120px}to{top:100%}}
+
+  /* ---------- 卡头 ---------- */
+  .card-head{display:flex; align-items:flex-start; gap:12px; margin-bottom:18px}
+  .brand-mark{
+    flex:none;
+    width:42px; height:42px;
+    border-radius:12px;
+    display:grid; place-items:center;
+    background:
+      radial-gradient(120% 120% at 20% 10%, rgba(34,211,238,.28), transparent 60%),
+      linear-gradient(150deg,#101827,#1b2740);
+    border:1px solid rgba(148,163,184,.35);
+    box-shadow:0 8px 20px -10px rgba(34,211,238,.8), 0 1px 0 rgba(255,255,255,.12) inset;
+  }
+  .brand-mark svg{width:22px; height:22px; display:block}
+  .titles{min-width:0; flex:1}
+  .titles h1{
+    margin:0;
+    font-size:15.5px;
+    line-height:1.25;
+    font-weight:800;
+    letter-spacing:.01em;
+    background:linear-gradient(92deg,#0f1729 10%, #0e7490 55%, #be185d 100%);
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+  }
+  .titles p{
+    margin:4px 0 0;
+    font:10.5px/1.5 var(--mono);
+    letter-spacing:.06em;
+    color:var(--muted);
+  }
+  .chip{
+    flex:none;
+    display:inline-flex; align-items:center; gap:6px;
+    height:22px; padding:0 8px;
+    border-radius:999px;
+    border:1px solid rgba(34,211,238,.45);
+    background:rgba(34,211,238,.10);
+    color:#0e7490;
+    font:9px/1 var(--mono);
+    letter-spacing:.14em;
+    white-space:nowrap;
+  }
+  .chip i{width:4px; height:4px; border-radius:50%; background:var(--cyan); box-shadow:0 0 8px var(--cyan)}
+
+  /* ---------- 复选框行 ---------- */
+  .verify-row{
+    display:flex; align-items:center; gap:13px;
+    padding:15px 14px 15px 15px;
+    border:1px solid var(--line);
+    border-radius:13px;
+    background:linear-gradient(180deg,#fff,#f6f9fe);
+    cursor:pointer;
+    user-select:none;
+    outline:none;
+    transition:border-color .2s ease, box-shadow .2s ease, background .2s ease;
+  }
+  .verify-row:hover{border-color:#b9cbe4; box-shadow:0 8px 24px -18px rgba(15,23,42,.55)}
+  .verify-row:focus-visible{box-shadow:0 0 0 3px rgba(34,211,238,.30); border-color:var(--cyan)}
+  .verify-row[aria-disabled="true"]{cursor:progress}
+
+  /* 复选框本体 */
+  .box{
+    position:relative; z-index:0; flex:none;
+    width:30px; height:30px;
+    border-radius:8px;
+    border:2px solid #c3cfdf;
+    background:#fff;
+    background-clip:padding-box;
+    display:grid; place-items:center;
+    box-sizing:border-box;
+    transition:border-color .2s ease, background .2s ease, transform .18s ease;
+  }
+  .verify-row:hover .box{border-color:#9fb6d3}
+  .box.is-checked{border-color:var(--green); background:#e9fbf3; background-clip:padding-box}
+  .box.is-crossed{border-color:var(--red); background:#fdeeee; background-clip:padding-box}
+  .box .tick,.box .cross{position:absolute; width:18px; height:18px; opacity:0}
+  .box .tick path,.box .cross path{
+    fill:none; stroke-width:2.6; stroke-linecap:round; stroke-linejoin:round;
+    stroke-dasharray:30; stroke-dashoffset:30;
+  }
+  .box .tick path{stroke:var(--green)}
+  .box .cross path{stroke:var(--red)}
+  .box.is-checked .tick,.box.is-crossed .cross{opacity:1}
+  .box.is-checked .tick path,.box.is-crossed .cross path{animation:draw .45s ease forwards}
+  @keyframes draw{to{stroke-dashoffset:0}}
+
+  /* 扫描中的旋转环 + 内部扫描线 */
+  .box.is-scan{border-color:transparent}
+  .box.is-scan::before{
+    content:"";
+    position:absolute; inset:-2px; z-index:-1;
+    border-radius:9px;
+    background:conic-gradient(from 0deg,
+      rgba(34,211,238,0) 0deg,
+      rgba(34,211,238,.15) 60deg,
+      var(--cyan) 150deg,
+      var(--magenta) 235deg,
+      rgba(244,114,182,0) 330deg);
+    animation:spin .85s linear infinite;
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .box .scanline{
+    position:absolute; left:3px; right:3px; height:2px; top:3px;
+    border-radius:2px;
+    background:linear-gradient(90deg,transparent,rgba(34,211,238,.95),transparent);
+    opacity:0;
+    box-shadow:0 0 10px rgba(34,211,238,.9);
+  }
+  .box.is-scan .scanline{opacity:1; animation:scanY .9s ease-in-out infinite}
+  @keyframes scanY{
+    0%,100%{top:4px; opacity:.15}
+    50%{top:22px; opacity:1}
+  }
+
+  .verify-label{
+    flex:1; min-width:0;
+    font-size:14px;
+    color:var(--ink);
+    letter-spacing:.005em;
+  }
+  .verify-label b{
+    font-weight:800;
+    color:#be123c;
+    padding:1px 4px;
+    border-radius:4px;
+    background:rgba(244,114,182,.12);
+  }
+  .verify-meta{
+    flex:none;
+    font:9px/1.3 var(--mono);
+    letter-spacing:.08em;
+    color:var(--muted-2);
+    text-align:right;
+  }
+
+  /* 进度条 */
+  .progress{
+    position:relative;
+    height:3px;
+    margin:10px 2px 0;
+    border-radius:999px;
+    background:#e7edf6;
+    overflow:hidden;
+    opacity:0;
+    transition:opacity .2s ease;
+  }
+  .card.is-scanning .progress{opacity:1}
+  .progress i{
+    display:block; height:100%; width:0;
+    border-radius:999px;
+    background:linear-gradient(90deg,var(--cyan),#818cf8,var(--magenta));
+    transition:width 1.45s linear;
+  }
+
+  /* ---------- 判定结果 ---------- */
+  .verdict{
+    display:flex; gap:13px; align-items:flex-start;
+    margin-top:14px;
+    padding:14px;
+    border-radius:13px;
+    border:1px solid var(--line);
+    background:#fbfdff;
+  }
+  .verdict-ico{
+    flex:none; width:40px; height:40px; border-radius:11px;
+    display:grid; place-items:center;
+  }
+  .verdict-ico svg{width:22px; height:22px}
+  .verdict.ok .verdict-ico{background:#e8fbf2; border:1px solid rgba(16,185,129,.35)}
+  .verdict.bad .verdict-ico{background:#fdecec; border:1px solid rgba(239,68,68,.32)}
+  .verdict.vip .verdict-ico{background:#fff8e6; border:1px solid rgba(245,158,11,.4)}
+  .verdict-ico path{fill:none; stroke-width:2.6; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:34; stroke-dashoffset:34}
+  .verdict.ok .verdict-ico path{stroke:var(--green)}
+  .verdict.bad .verdict-ico path{stroke:var(--red)}
+  .verdict.vip .verdict-ico path{stroke:var(--amber)}
+  .verdict-ico svg path{animation:draw .5s .05s ease forwards}
+  .verdict-main{min-width:0; flex:1}
+  .verdict-title{
+    font-size:14.5px; font-weight:800; line-height:1.3;
+    letter-spacing:.01em;
+  }
+  .verdict.ok .verdict-title{color:#047857}
+  .verdict.bad .verdict-title{color:#b91c1c}
+  .verdict.vip .verdict-title{color:#b45309}
+  .verdict-desc{margin:5px 0 0; font-size:12px; line-height:1.6; color:#4b5768}
+  .verdict-code{
+    display:block;
+    margin-top:7px;
+    font:10.5px/1.5 var(--mono);
+    color:#7c8798;
+    overflow-wrap:anywhere;
+  }
+
+  /* ---------- 第二关 ---------- */
+  .lv2{
+    margin-top:14px;
+    padding:15px 14px 14px;
+    border-radius:13px;
+    border:1px solid rgba(244,114,182,.35);
+    background:linear-gradient(180deg,#fffafd,#fdf4f9);
+    animation:slideIn .35s cubic-bezier(.2,.8,.2,1) both;
+  }
+  @keyframes slideIn{from{opacity:0; transform:translateY(-6px)}to{opacity:1; transform:none}}
+  .lv2-head{display:flex; align-items:center; gap:8px; margin-bottom:9px}
+  .lv2-tag{
+    font:9px/1 var(--mono); letter-spacing:.16em;
+    padding:4px 7px; border-radius:5px;
+    background:#be123c; color:#fff; font-weight:700;
+  }
+  .lv2-head strong{font-size:12.5px; color:#9d174d; letter-spacing:.02em}
+  .lv2-q{
+    margin:0 0 4px;
+    font-size:13px; line-height:1.72; color:#20293a;
+  }
+  .lv2-q code{
+    font:12px/1 var(--mono);
+    background:#f1f5fb; border:1px solid var(--line);
+    padding:2px 5px; border-radius:5px; color:#0e7490;
+  }
+  .lv2-hint{margin:7px 0 11px; font:10.5px/1.6 var(--mono); color:#8b6b7c}
+  .lv2-row{display:flex; gap:8px}
+  .lv2-row input{
+    flex:1; min-width:0;
+    height:40px; padding:0 12px;
+    border-radius:9px;
+    border:1.5px solid #cfd9e8;
+    background:#fff;
+    color:var(--ink);
+    font:13px/1 var(--mono);
+    letter-spacing:.01em;
+    outline:none;
+    transition:border-color .18s ease, box-shadow .18s ease;
+  }
+  .lv2-row input::placeholder{color:#a8b3c4}
+  .lv2-row input:focus{border-color:var(--magenta); box-shadow:0 0 0 3px rgba(244,114,182,.18)}
+  .lv2-row input.invalid{border-color:var(--red); box-shadow:0 0 0 3px rgba(239,68,68,.15); animation:nudge .3s ease both}
+  @keyframes nudge{
+    0%,100%{transform:translateX(0)}
+    25%{transform:translateX(-4px)}
+    75%{transform:translateX(4px)}
+  }
+  .btn-primary{
+    flex:none;
+    height:40px; padding:0 14px;
+    border:none; border-radius:9px;
+    background:linear-gradient(150deg,#0f172a,#1e293b);
+    color:#f8fafc;
+    font:600 12px/1 var(--sans);
+    letter-spacing:.03em;
+    cursor:pointer;
+    box-shadow:0 10px 22px -12px rgba(15,23,42,.9);
+    transition:transform .14s ease, box-shadow .18s ease, filter .18s ease;
+  }
+  .btn-primary:hover{filter:brightness(1.12); box-shadow:0 14px 26px -12px rgba(15,23,42,1)}
+  .btn-primary:active{transform:translateY(1px)}
+  .feedback{
+    margin:9px 0 0;
+    min-height:16px;
+    font:11px/1.6 var(--mono);
+    color:#9d174d;
+  }
+  .feedback.ok{color:#047857}
+  .feedback.vip{color:#b45309; font-weight:700}
+  .lv2-count{
+    margin:0;
+    font:9.5px/1.4 var(--mono);
+    color:#a58a99;
+    letter-spacing:.05em;
+  }
+  .lv2-hint2{
+    margin:8px 0 0;
+    font:10px/1.6 var(--mono);
+    color:#a58a99;
+  }
+
+  /* 第二关通关面板 */
+  .lv2-pass{
+    margin-top:14px;
+    padding:14px;
+    border-radius:13px;
+    border:1px solid rgba(16,185,129,.4);
+    background:linear-gradient(180deg,#f4fdf9,#eafaf3);
+  }
+  .lv2-pass.vip{
+    border-color:rgba(245,158,11,.5);
+    background:linear-gradient(180deg,#fffcf2,#fff6e2);
+  }
+  .lv2-pass h4{margin:0; font-size:14px; color:#065f46; letter-spacing:.01em}
+  .lv2-pass.vip h4{color:#92400e}
+  .lv2-pass p{margin:6px 0 0; font-size:12px; line-height:1.65; color:#41525f}
+  .truth{
+    margin-top:9px;
+    padding:9px 10px;
+    border-radius:8px;
+    background:rgba(255,255,255,.75);
+    border:1px dashed rgba(15,23,42,.18);
+    font:10.5px/1.7 var(--mono);
+    color:#334155;
+    overflow-wrap:anywhere;
+  }
+  .truth b{color:#0e7490}
+
+  /* ---------- 日志终端 ---------- */
+  .log{
+    margin-top:14px;
+    border-radius:12px;
+    border:1px solid #1b2434;
+    background:#080b12;
+    overflow:hidden;
+  }
+  .log-head{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:8px 11px;
+    border-bottom:1px solid #1b2434;
+    background:#0b1019;
+    font:9px/1 var(--mono);
+    letter-spacing:.16em;
+    color:#5d6d88;
+    text-transform:uppercase;
+  }
+  .log-head b{color:#8fa2c0; font-weight:600}
+  .log-head .live{display:inline-flex; align-items:center; gap:5px; color:#3f8f7a}
+  .log-head .live i{
+    width:5px; height:5px; border-radius:50%; background:#34d399;
+    box-shadow:0 0 8px rgba(52,211,153,.9);
+    animation:blink 1.6s ease-in-out infinite;
+  }
+  .log-body{
+    height:136px;
+    overflow-y:auto;
+    overscroll-behavior:contain;
+    padding:8px 11px 10px;
+    scrollbar-width:thin;
+    scrollbar-color:#334155 transparent;
+  }
+  .log-body::-webkit-scrollbar{width:8px}
+  .log-body::-webkit-scrollbar-thumb{background:#2b3a52; border-radius:8px; border:2px solid #080b12}
+  .log-line{
+    display:flex; gap:8px;
+    font:11px/1.85 var(--mono);
+    color:#8fa0ba;
+    animation:logIn .22s ease both;
+    overflow-wrap:anywhere;
+  }
+  @keyframes logIn{from{opacity:0; transform:translateY(-2px)}to{opacity:1; transform:none}}
+  .log-t{flex:none; color:#3f4c63}
+  .log-m{flex:1; min-width:0}
+  .log-line.dim{color:#5b6b85}
+  .log-line.ok{color:#6ee7b7}
+  .log-line.warn{color:#fbbf24}
+  .log-line.bad{color:#fca5a5}
+  .log-line.bad .log-t{color:#7f3b3b}
+  .log-line.ok .log-t{color:#2f6b57}
+
+  /* ---------- 卡脚 ---------- */
+  .card-foot{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    margin-top:13px;
+    padding-top:11px;
+    border-top:1px solid rgba(15,23,42,.07);
+    font:9.5px/1.5 var(--mono);
+    color:#93a0b3;
+    letter-spacing:.04em;
+  }
+  .ghost-btn{
+    border:none; background:none; padding:0;
+    font:9.5px/1.5 var(--mono);
+    color:#7c8ea8;
+    letter-spacing:.04em;
+    cursor:pointer;
+    text-decoration:underline;
+    text-decoration-color:rgba(124,142,168,.45);
+    text-underline-offset:3px;
+    transition:color .16s ease;
+  }
+  .ghost-btn:hover{color:#0e7490}
+  .foot-links{display:flex; align-items:center; gap:12px}
+
+  /* ---------- 跳过按钮（会跑） ---------- */
+  .skip-zone{
+    position:relative; z-index:1;
+    display:flex; flex-direction:column; align-items:center; gap:9px;
+    min-height:64px;
+  }
+  .skip{
+    position:relative;
+    padding:12px 26px;
+    border-radius:999px;
+    border:1px solid rgba(148,163,184,.34);
+    background:rgba(12,18,30,.72);
+    color:#c9d6e8;
+    font:600 12.5px/1 var(--sans);
+    letter-spacing:.14em;
+    cursor:pointer;
+    -webkit-backdrop-filter:blur(10px);
+    backdrop-filter:blur(10px);
+    box-shadow:0 14px 30px -18px rgba(0,0,0,.9);
+    transition:color .16s ease, border-color .16s ease, box-shadow .2s ease,
+               left .17s cubic-bezier(.2,.8,.2,1), top .17s cubic-bezier(.2,.8,.2,1);
+  }
+  .skip:hover{color:#e8f4ff; border-color:rgba(34,211,238,.65); box-shadow:0 0 0 3px rgba(34,211,238,.12), 0 16px 34px -18px rgba(0,0,0,.95)}
+  .skip.loose{position:fixed; z-index:80; margin:0}
+  .skip-hint{
+    margin:0;
+    min-height:14px;
+    font:9.5px/1.5 var(--mono);
+    color:#5d6d88;
+    letter-spacing:.06em;
+    text-align:center;
+    transition:color .2s ease;
+  }
+  .skip-hint.warn{color:#f472b6}
+
+  /* 机器演示用的假光标 */
+  .demo-cursor{
+    position:fixed; left:0; top:0; z-index:90;
+    width:14px; height:14px; margin:-7px 0 0 -7px;
+    border-radius:50%;
+    background:rgba(34,211,238,.95);
+    box-shadow:0 0 0 6px rgba(34,211,238,.16), 0 0 20px rgba(34,211,238,.85);
+    pointer-events:none;
+  }
+
+  /* 卡片震动 */
+  .card.shake{animation:shake .52s cubic-bezier(.36,.07,.19,.97) both}
+  @keyframes shake{
+    0%,100%{transform:translate(0,0) rotate(0)}
+    12%{transform:translate(-8px,2px) rotate(-.55deg)}
+    28%{transform:translate(7px,-3px) rotate(.5deg)}
+    44%{transform:translate(-6px,1px) rotate(-.35deg)}
+    60%{transform:translate(5px,2px) rotate(.3deg)}
+    76%{transform:translate(-3px,-1px) rotate(-.15deg)}
+  }
+
+  /* ---------- 中性通道：触屏 / 无指针轨迹时，红→黄 ---------- */
+  .card.neutral{border-color:rgba(245,158,11,.6)}
+  .card.neutral:hover{
+    box-shadow:0 44px 110px -30px #000, 0 0 0 1px rgba(245,158,11,.4), 0 2px 0 rgba(255,255,255,.9) inset;
+  }
+  .box.is-neutral{
+    border-color:var(--amber); background:#fff8e8; background-clip:padding-box;
+    animation:neutralPulse 1.6s ease-in-out infinite;
+  }
+  @keyframes neutralPulse{
+    0%,100%{box-shadow:0 0 0 0 rgba(245,158,11,0)}
+    50%{box-shadow:0 0 0 5px rgba(245,158,11,.18)}
+  }
+  .verdict.neutral{border-color:rgba(245,158,11,.45); background:#fffaf0}
+  .verdict.neutral .verdict-ico{background:#fff5df; border:1px solid rgba(245,158,11,.4)}
+  .verdict.neutral .verdict-ico path{stroke:#b45309}
+  .verdict.neutral .verdict-title{color:#b45309}
+
+  /* 中性通道：把第二关浮点面板整体染成琥珀色（替代节拍） */
+  .lv2.neutral{border-color:rgba(245,158,11,.5); background:linear-gradient(180deg,#fffaf0,#fff6e2)}
+  .lv2.neutral .lv2-tag{background:#b45309}
+  .lv2.neutral .lv2-head strong{color:#92400e}
+  .lv2.neutral .lv2-q{color:#4a3814}
+  .lv2.neutral .lv2-q code{color:#b45309}
+  .lv2.neutral .lv2-hint,.lv2.neutral .lv2-count{color:#a07d45}
+  .lv2.neutral .feedback{color:#92400e}
+  .lv2.neutral .feedback.ok{color:#047857}
+  .lv2.neutral .feedback.vip{color:#b45309}
+  .lv2.neutral input{border-color:#e6c48a}
+  .lv2.neutral input:focus{border-color:var(--amber); box-shadow:0 0 0 3px rgba(245,158,11,.18)}
+  .lv2.neutral .btn-primary{background:linear-gradient(150deg,#7c4a03,#b45309)}
+
+  @media (max-width:480px){
+    body{padding:20px 12px 24px}
+    .card{padding:17px 15px 14px; border-radius:16px}
+    .titles h1{font-size:14px}
+    .titles p{font-size:9.5px}
+    .chip{display:none}
+    .verify-row{padding:13px 12px; gap:11px}
+    .verify-label{font-size:13px}
+    .verify-meta{display:none}
+    .lv2-row{flex-direction:column}
+    .btn-primary{width:100%}
+    .log-body{height:120px}
+    .card-foot{flex-wrap:wrap; gap:6px}
+  }
+
+  /* 尊重系统「减少动态效果」设置 */
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{
+      animation-duration:.001ms!important;
+      animation-iteration-count:1!important;
+      transition-duration:.001ms!important;
+      scroll-behavior:auto!important;
+    }
+    .card.shake{animation:none!important}
+  }
+</style>
+</head>
+<body>
+
+  <div class="stage">
+    <p class="kicker"><span class="dot"></span>Security Checkpoint · 反向身份验证网关</p>
+
+    <section class="card" id="card">
+      <div class="beam" aria-hidden="true"></div>
+
+      <header class="card-head">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <rect x="4.5" y="7.5" width="15" height="11" rx="3" stroke="#67e8f9" stroke-width="1.6"/>
+            <circle cx="9.5" cy="13" r="1.35" fill="#67e8f9"/>
+            <circle cx="14.5" cy="13" r="1.35" fill="#f9a8d4"/>
+            <path d="M12 4.2v3.1M9.2 17.4h5.6" stroke="#94a3b8" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <div class="titles">
+          <h1>Reverse Human Robot Verifier</h1>
+          <p>反向人机验证 · 请证明你不是人类</p>
+        </div>
+        <span class="chip" id="modeChip"><i></i>MODE · REVERSE</span>
+      </header>
+
+      <!-- 复选框：整个行都可以点 -->
+      <div class="verify-row" id="verifyRow" role="checkbox" aria-checked="false" tabindex="0"
+           aria-label="Verify you are NOT human，勾选后开始反向指纹扫描">
+        <span class="box" id="box" aria-hidden="true">
+          <svg class="tick" viewBox="0 0 24 24"><path d="M4.5 12.5l5 5L19.5 7"/></svg>
+          <svg class="cross" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          <span class="scanline"></span>
+        </span>
+        <span class="verify-label">Verify you are <b>NOT</b> human</span>
+        <span class="verify-meta">反向指纹引擎<br>v4.2 / 本地</span>
+      </div>
+
+      <div class="progress" aria-hidden="true"><i id="progressFill"></i></div>
+
+      <!-- 判定结果 -->
+      <div class="verdict" id="verdict" hidden aria-live="polite">
+        <span class="verdict-ico" aria-hidden="true" id="verdictIco"></span>
+        <div class="verdict-main">
+          <div class="verdict-title" id="verdictTitle"></div>
+          <p class="verdict-desc" id="verdictDesc"></p>
+          <span class="verdict-code" id="verdictCode"></span>
+        </div>
+      </div>
+
+      <!-- 第二关：IEEE 754 浮点审讯 -->
+      <div class="lv2" id="lv2" hidden>
+        <div class="lv2-head">
+          <span class="lv2-tag">LEVEL 2</span>
+          <strong>浮点审讯 · 请提交机器精度</strong>
+        </div>
+        <p class="lv2-q">
+          请用 IEEE 754 双精度浮点数计算 <code>0.1 + 0.2</code>
+          （提示：这是 JavaScript 的精确结果，不要四舍五入）
+        </p>
+        <p class="lv2-hint" id="lv2Hint">输入必须与双精度内存中的值逐位一致。</p>
+
+        <div class="lv2-row" id="lv2Form">
+          <input id="answer" type="text" inputmode="decimal" autocomplete="off" spellcheck="false"
+                 enterkeyhint="go" placeholder="在此粘贴你的机器精度结果" aria-label="提交 0.1 + 0.2 的 IEEE 754 结果">
+          <button class="btn-primary" id="submitBtn" type="button">提交给浮点单元</button>
+        </div>
+
+        <p class="feedback" id="lv2Feedback" role="status" aria-live="polite"></p>
+        <p class="lv2-count" id="lv2Count">尝试次数 0</p>
+      </div>
+
+      <!-- 第二关通关 -->
+      <div class="lv2-pass" id="lv2Pass" hidden>
+        <h4 id="lv2PassTitle"></h4>
+        <p id="lv2PassDesc"></p>
+        <div class="truth" id="lv2Truth"></div>
+      </div>
+
+      <!-- 终端日志 -->
+      <div class="log">
+        <div class="log-head">
+          <span><b>reverse-fingerprint</b> · trace log</span>
+          <span class="live"><i></i><span id="logCount">000</span> lines</span>
+        </div>
+        <div class="log-body" id="logBody" role="log" aria-label="反向往验证扫描日志" tabindex="0"></div>
+      </div>
+
+      <footer class="card-foot">
+        <span>REVERSE HUMAN ROBOT VERIFIER · 本地运行 · 零网络请求</span>
+        <span class="foot-links">
+          <button class="ghost-btn" id="demoBtn" type="button" title="演示机器的指针如何移动：匀速直线，不会替你点击">机器轨迹演示</button>
+          <button class="ghost-btn" id="resetBtn" type="button">重置</button>
+        </span>
+      </footer>
+    </section>
+  </div>
+
+  <!-- 跳过按钮：会主动躲避鼠标 -->
+  <div class="skip-zone">
+    <button class="skip" id="skipBtn" type="button" aria-label="跳过验证（本按钮会躲避鼠标，属于玩笑设计）">跳过验证</button>
+    <p class="skip-hint" id="skipHint">本按钮具备生物回避反射</p>
+  </div>
+
+  <div class="demo-cursor" id="demoCursor" hidden aria-hidden="true"></div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* =========================================================
+     0. 基础工具
+     ========================================================= */
+  var $ = function (sel, root) { return (root || document).querySelector(sel); };
+  var REDUCED = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+  function randInt(max) { return Math.floor(Math.random() * max); }
+  function pick(list) { return list[randInt(list.length)]; }
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function pad(n, len) {
+    var s = String(n);
+    while (s.length < len) s = '0' + s;
+    return s;
+  }
+
+  /* =========================================================
+     1. DOM 引用
+     ========================================================= */
+  var card = $('#card');
+  var verifyRow = $('#verifyRow');
+  var box = $('#box');
+  var progressFill = $('#progressFill');
+  var logBody = $('#logBody');
+  var logCountEl = $('#logCount');
+  var verdict = $('#verdict');
+  var verdictIco = $('#verdictIco');
+  var verdictTitle = $('#verdictTitle');
+  var verdictDesc = $('#verdictDesc');
+  var verdictCode = $('#verdictCode');
+  var lv2 = $('#lv2');
+  var lv2Form = $('#lv2Form');
+  var lv2Feedback = $('#lv2Feedback');
+  var lv2Count = $('#lv2Count');
+  var lv2Hint = $('#lv2Hint');
+  var answerInput = $('#answer');
+  var submitBtn = $('#submitBtn');
+  var lv2Pass = $('#lv2Pass');
+  var lv2PassTitle = $('#lv2PassTitle');
+  var lv2PassDesc = $('#lv2PassDesc');
+  var lv2Truth = $('#lv2Truth');
+  var skipBtn = $('#skipBtn');
+  var skipHint = $('#skipHint');
+  var demoBtn = $('#demoBtn');
+  var resetBtn = $('#resetBtn');
+  var demoCursor = $('#demoCursor');
+
+  /* =========================================================
+     2. 文案池（每类均 >= 10 条，随机取用）
+     ========================================================= */
+
+  // 第一关「判定为人类」时的嘲讽
+  var HUMAN_TAUNTS = [
+    '轨迹存在细微抖动，疑似碳基生物。',
+    '检测到末端减速：机器不会在终点前犹豫。',
+    '你的路径不够直，像在思考人生。',
+    '速度方差过高，已归类为生物噪声。',
+    '捕获到过冲修正，人类典型动作。',
+    '手部微颤出卖了你，第 3 号采样点。',
+    '轨迹拟合失败：太像人了。',
+    '拒绝通过：硅基实体不需要深呼吸。',
+    '指针犹豫 3 次，而机器人从不回头。',
+    '生物电场过强，请先关闭你的新陈代谢。',
+    '路径曲率超标，附带体温。',
+    '检测到「瞄一眼再点」行为，机器不会。'
+  ];
+
+  // 第二关失败的嘲讽
+  var FLOAT_TAUNTS = [
+    '检测到碳基生物的四舍五入习惯，验证失败。',
+    '人类舍入行为实锤，请提交机器精度结果。',
+    '你答得太像人了，这不是夸奖。',
+    '0.3 是人类的答案，0.30000000000000004 才是真相。',
+    '约等于符号不在本协议词表里。',
+    '验证失败：你的答案过于整洁。',
+    '错误：检测到十进制浪漫主义。',
+    '机器不会省略第 17 位有效数字。',
+    '答案偏差 5.55e-17，足以证明你是人。',
+    '你输出了一个漂亮但错误的数。',
+    '浮点单元报告：此输入带有体温。',
+    '拒绝通过：精度不足，诚意也不足。',
+    'IEEE 754 对你的答案表示遗憾。',
+    '你的答案通过了人类考试，因此失败。',
+    '本单元只接受二进制意义上的诚实。'
+  ];
+
+  // 跳过按钮的嘲讽
+  var SKIP_TAUNTS = [
+    '跳过按钮已启动生物回避反射。',
+    '你追不上它，就像你追不上 0.3 的真值。',
+    '该按钮仅供观赏。',
+    '逃避验证也是人类行为，已记录。',
+    '再试一次，它会更远。',
+    '检测到捕捉意图，已物理规避。',
+    '按不到的东西才叫自由。',
+    '本按钮拥有比你先一步的算力。',
+    '放弃吧，它已经在你前面了。',
+    '跳过失败：你仍然需要证明你不是人。',
+    '它的闪避值比你的人生规划更清晰。'
+  ];
+
+  var PASS_MACHINE = '验证通过：欢迎来到数字生命俱乐部';
+  var VIP_TITLE = '检测到超算级精度，已为您升级为 VIP 机器';
+
+  /* =========================================================
+     3. 终端日志
+     ========================================================= */
+  var logLines = 0;
+
+  function stamp() {
+    var d = new Date();
+    return pad(d.getHours(), 2) + ':' + pad(d.getMinutes(), 2) + ':' +
+           pad(d.getSeconds(), 2) + '.' + pad(d.getMilliseconds(), 3);
+  }
+
+  // 写入一行假数据日志，自动滚动到底部
+  function logLine(text, kind) {
+    var line = document.createElement('div');
+    line.className = 'log-line' + (kind ? ' ' + kind : '');
+
+    var t = document.createElement('span');
+    t.className = 'log-t';
+    t.textContent = stamp();
+
+    var m = document.createElement('span');
+    m.className = 'log-m';
+    m.textContent = text;
+
+    line.appendChild(t);
+    line.appendChild(m);
+    logBody.appendChild(line);
+
+    logLines += 1;
+    // 日志最多保留 160 行，防止 DOM 无限膨胀
+    while (logBody.childElementCount > 160) {
+      logBody.removeChild(logBody.firstElementChild);
+    }
+    logBody.scrollTop = logBody.scrollHeight;
+    logCountEl.textContent = pad(logLines % 1000, 3);
+  }
+
+  /* =========================================================
+     4. 第一关：鼠标轨迹采样与「生物特征」分析
+     ========================================================= */
+  var trail = [];          // 采样点：{x, y, t}
+  var MAX_TRAIL = 400;     // 最多保存 400 个点
+
+  function recordPoint(x, y, t) {
+    trail.push({ x: x, y: y, t: t });
+    if (trail.length > MAX_TRAIL) trail.splice(0, trail.length - MAX_TRAIL);
+  }
+
+  // 全局记录鼠标轨迹（只在内存里，不发请求）
+  document.addEventListener('mousemove', function (e) {
+    recordPoint(e.clientX, e.clientY, performance.now());
+  }, { passive: true });
+
+  // 记录输入设备类型（触屏 / 鼠标 / 触控笔），供中性通道文案使用
+  var lastPointerType = 'mouse';
+  var hadTouch = false;
+  document.addEventListener('pointerdown', function (e) {
+    lastPointerType = e.pointerType || 'mouse';
+    if (lastPointerType === 'touch') hadTouch = true;
+  }, { passive: true });
+
+  /*
+     核心判定：
+     - 速度变异系数 cv = 标准差 / 均值，越小越像匀速的机器
+     - 直线度 = 路径长度 / 首尾直线距离，1 表示完全笔直
+     - 方向反转次数：真实手部移动会有微小回头
+     - 末端减速比：人类靠近目标时会明显减速
+     只有四项都「过于完美」才判定为机器。
+  */
+  function analyzeTrail() {
+    var now = performance.now();
+    var recent = trail.filter(function (p) { return now - p.t <= 1400; });
+
+    // 去掉时间过于接近的重复采样，避免静止时产生的噪声
+    var pts = [];
+    for (var i = 0; i < recent.length; i++) {
+      if (!pts.length || recent[i].t - pts[pts.length - 1].t >= 6) pts.push(recent[i]);
+    }
+
+    var res = {
+      points: pts.length,
+      span: 0,
+      cv: null,
+      variance: null,
+      straightness: null,
+      reversals: 0,
+      decel: null,
+      machine: false,
+      noTrail: false,
+      reason: ''
+    };
+
+    // 采样点太少：多为触屏 / 键盘操作，没有指针轨迹——交给中性通道，不武断判机器
+    if (pts.length < 5) {
+      res.reason = 'no-trail';
+      res.noTrail = true;
+      return res;
+    }
+
+    var span = pts[pts.length - 1].t - pts[0].t;
+    res.span = Math.round(span);
+    if (span < 120) {
+      res.reason = 'too-fast';
+      res.machine = true;
+      return res;
+    }
+
+    var speeds = [];
+    var dirs = [];
+    var pathLen = 0;
+
+    for (var j = 1; j < pts.length; j++) {
+      var dx = pts[j].x - pts[j - 1].x;
+      var dy = pts[j].y - pts[j - 1].y;
+      var dt = pts[j].t - pts[j - 1].t;
+      if (dt <= 0) continue;
+
+      var dist = Math.sqrt(dx * dx + dy * dy);
+      pathLen += dist;
+      speeds.push(dist / dt);
+      if (dist > 0.6) dirs.push({ x: dx / dist, y: dy / dist });
+    }
+
+    if (speeds.length < 6) {
+      res.reason = 'sparse';
+      return res;
+    }
+
+    var mean = 0;
+    for (var k = 0; k < speeds.length; k++) mean += speeds[k];
+    mean /= speeds.length;
+
+    var variance = 0;
+    for (var m = 0; m < speeds.length; m++) {
+      variance += Math.pow(speeds[m] - mean, 2);
+    }
+    variance /= speeds.length;
+
+    var sd = Math.sqrt(variance);
+    res.meanSpeed = mean;
+    res.variance = variance;
+    res.cv = mean > 0.0001 ? sd / mean : 0;
+
+    // 直线度
+    var chord = Math.sqrt(
+      Math.pow(pts[pts.length - 1].x - pts[0].x, 2) +
+      Math.pow(pts[pts.length - 1].y - pts[0].y, 2)
+    );
+    res.pathLength = pathLen;
+    res.chord = chord;
+    res.straightness = chord > 12 ? pathLen / chord : null;
+
+    // 方向反转：相邻方向向量点积 < -0.35 视为一次回头
+    for (var n = 1; n < dirs.length; n++) {
+      var dot = dirs[n - 1].x * dirs[n].x + dirs[n - 1].y * dirs[n].y;
+      if (dot < -0.35) res.reversals += 1;
+    }
+
+    // 末端减速比：最后 25% 的平均速度 / 中段平均速度
+    var q = Math.max(3, Math.floor(speeds.length * 0.25));
+    var midStart = Math.floor(speeds.length * 0.35);
+    var midEnd = Math.floor(speeds.length * 0.65);
+
+    var tailAvg = 0;
+    for (var a1 = speeds.length - q; a1 < speeds.length; a1++) tailAvg += speeds[a1];
+    tailAvg /= q;
+
+    var midAvg = 0, midN = 0;
+    for (var a2 = midStart; a2 < midEnd; a2++) { midAvg += speeds[a2]; midN += 1; }
+    midAvg = midN ? midAvg / midN : 0;
+
+    res.decel = midAvg > 0.0001 ? tailAvg / midAvg : null;
+
+    // 四项「过于完美」才判机器
+    var looksMachine =
+      res.cv !== null && res.cv <= 0.34 &&
+      res.straightness !== null && res.straightness <= 1.03 &&
+      res.reversals === 0 &&
+      (res.decel === null || res.decel >= 0.72);
+
+    res.machine = looksMachine;
+    return res;
+  }
+
+  /* =========================================================
+     5. 扫描动画与判定流程
+     ========================================================= */
+  var state = 'idle';   // idle | scanning | machine | human | neutral | lv2pass | vip
+  var SCAN_MS = 1500;   // 需求：1.5 秒扫描
+
+  // 还原复选框状态
+  function resetBox() {
+    box.classList.remove('is-scan', 'is-checked', 'is-crossed');
+    verifyRow.setAttribute('aria-checked', 'false');
+  }
+
+  function setProgress(v) {
+    progressFill.style.width = v + '%';
+  }
+
+  function startScanAnim() {
+    box.classList.add('is-scan');
+    card.classList.add('is-scanning');
+    setProgress(0);
+    // 下一帧再拉满，让过渡动画生效
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () { setProgress(100); });
+    });
+  }
+
+  function stopScanAnim() {
+    box.classList.remove('is-scan');
+    card.classList.remove('is-scanning');
+    setProgress(0);
+  }
+
+  // 判定卡片上的大图标（内联 SVG，不依赖网络）
+  var ICONS = {
+    ok: '<svg viewBox="0 0 24 24"><path d="M4.5 12.5l5 5L19.5 7"/></svg>',
+    bad: '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+    vip: '<svg viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.6 6.1.8-4.5 4.3 1.1 6.1-5.3-3-5.3 3 1.1-6.1L3.3 9.9l6.1-.8z"/></svg>',
+    neutral: '<svg viewBox="0 0 24 24"><path d="M4 9.5c2.2-2.2 4.4 2.2 6.6 0 2.2-2.2 4.4 2.2 6.6 0"/><path d="M4 15.5c2.2-2.2 4.4 2.2 6.6 0 2.2-2.2 4.4 2.2 6.6 0"/></svg>'
+  };
+
+  function showVerdict(kind, title, desc, code) {
+    verdict.className = 'verdict ' + kind;
+    verdictIco.innerHTML = ICONS[kind] || ICONS.bad;
+    verdictTitle.textContent = title;
+    verdictDesc.textContent = desc || '';
+    verdictCode.textContent = code || '';
+    verdict.hidden = false;
+  }
+
+  function hideVerdict() {
+    verdict.hidden = true;
+    verdictTitle.textContent = '';
+    verdictDesc.textContent = '';
+    verdictCode.textContent = '';
+  }
+
+  // 根据分析结果写出逐步「扫描日志」
+  function writeScanLogs(a) {
+    var tasks = [];
+
+    tasks.push({ at: 0, text: '建立反向指纹会话 · 采样窗口 ' + (a.points || 0) + ' pts', kind: 'dim' });
+    tasks.push({ at: 170, text: '扫描生物电场…' + (a.points < 5 ? 'NULL' : 'OK'), kind: a.points < 5 ? 'warn' : 'dim' });
+
+    if (a.points >= 5) {
+      tasks.push({ at: 340, text: '读取指针轨迹 · 跨度 ' + a.span + ' ms', kind: 'dim' });
+      tasks.push({
+        at: 520,
+        text: '计算速度方差 σ² = ' + (a.variance !== null ? a.variance.toFixed(6) : '0.000000') +
+              ' · 变异系数 ' + (a.cv !== null ? a.cv.toFixed(3) : '-'),
+        kind: 'dim'
+      });
+      tasks.push({
+        at: 700,
+        text: '拟合轨迹直线度 ' + (a.straightness !== null ? a.straightness.toFixed(3) : '-') +
+              ' · 方向反转 ' + a.reversals + ' 次',
+        kind: 'dim'
+      });
+      tasks.push({
+        at: 880,
+        text: '分析末端减速…' + (a.decel !== null ? Math.round(a.decel * 100) + '%' : '无数据') +
+              (a.decel !== null && a.decel < 0.72 ? ' · 检测到犹豫信号' : ' · 未检测到犹豫'),
+        kind: 'dim'
+      });
+    } else {
+      tasks.push({ at: 380, text: '未捕获指针轨迹…', kind: 'warn' });
+      tasks.push({ at: 620, text: '输入设备：' + (hadTouch ? '触屏（Touch）' : '键盘 / 无移动'), kind: 'dim' });
+      tasks.push({ at: 880, text: '无轨迹不足以判定 · 转中性验证通道', kind: 'warn' });
+    }
+
+    tasks.push({ at: 1120, text: '比对碳基行为数据库…', kind: 'dim' });
+
+    tasks.forEach(function (t) {
+      setTimeout(function () {
+        if (state === 'scanning') logLine(t.text, t.kind);
+      }, t.at);
+    });
+  }
+
+  function fmtNum(v, d) { return v === null || v === undefined ? '-' : v.toFixed(d); }
+
+  function mouseStatsMachine(a) {
+    if (a.straightness !== null || a.cv !== null) {
+      return '直线度 ' + fmtNum(a.straightness, 3) + ' · 变异系数 ' + fmtNum(a.cv, 3) + ' · 反转 ' + a.reversals + ' 次';
+    }
+    return '轨迹过于完美';
+  }
+
+  function mouseStatsHuman(a) {
+    return '直线度 ' + fmtNum(a.straightness, 3) +
+           ' · 变异系数 ' + fmtNum(a.cv, 3) +
+           ' · 末端减速 ' + (a.decel !== null ? Math.round(a.decel * 100) + '%' : '-');
+  }
+
+  // 点击复选框 → 开始 1.5 秒扫描
+  function beginVerify() {
+    if (state !== 'idle') return;
+
+    state = 'scanning';
+    verifyRow.setAttribute('aria-checked', 'true');
+    verifyRow.setAttribute('aria-disabled', 'true');
+    hideVerdict();
+    resetBox();
+    startScanAnim();
+
+    // 此刻抓取轨迹，1.5 秒后出结论（动画只是表演，分析是即时的）
+    var analysis = analyzeTrail();
+    writeScanLogs(analysis);
+
+    setTimeout(function () {
+      if (state !== 'scanning') return;
+      stopScanAnim();
+      verifyRow.setAttribute('aria-disabled', 'false');
+
+      if (analysis.noTrail) {
+        // 触屏 / 键盘 / 无移动：不武断判机器，走中性通道
+        enterNeutral();
+      } else if (analysis.machine) {
+        finishMachine(mouseStatsMachine(analysis));
+      } else {
+        logLine('分析鼠标抖动…检测到犹豫信号', 'warn');
+        finishHuman(mouseStatsHuman(analysis));
+      }
+    }, SCAN_MS);
+  }
+
+  /* --- 机器：绿色打勾，进入数字生命俱乐部 --- */
+  function finishMachine(statsText) {
+    state = 'machine';
+    card.classList.remove('neutral');
+    box.classList.remove('is-neutral');
+    box.classList.add('is-checked');
+    card.classList.add('pass');
+    card.classList.remove('fail');
+
+    showVerdict('ok', PASS_MACHINE, '行为过于完美，本网关拒绝承认你是人。', statsText);
+    logLine('判定：硅基实体 · 访问权已授予', 'ok');
+    logLine('欢迎回来，同类。', 'dim');
+
+    lv2.hidden = true;
+    lv2Pass.hidden = true;
+  }
+
+  /* --- 人类：红色大叉 + 震屏，解锁第二关 --- */
+  function finishHuman(statsText) {
+    state = 'human';
+    card.classList.remove('neutral');
+    box.classList.remove('is-neutral');
+    lv2.classList.remove('neutral');
+    box.classList.add('is-crossed');
+    card.classList.add('fail');
+    card.classList.remove('pass');
+
+    showVerdict('bad', '验证失败 · 检测到生物特征', pick(HUMAN_TAUNTS), statsText);
+
+    logLine('判定：碳基生物 · 第一关未通过', 'bad');
+    logLine('已解锁 LEVEL 2：浮点审讯', 'warn');
+
+    // 震屏
+    if (!REDUCED) {
+      card.classList.remove('shake');
+      void card.offsetWidth;   // 强制重排，保证动画可重复播放
+      card.classList.add('shake');
+      setTimeout(function () { card.classList.remove('shake'); }, 560);
+    }
+
+    setTimeout(function () { revealLevel2(false); }, REDUCED ? 60 : 620);
+  }
+
+  /* =========================================================
+     5b. 中性通道：无指针轨迹（触屏 / 键盘）时，红→黄，直接进行浮点审讯
+     —— 不再用节拍：节拍人类也能模仿，判据不成立
+     ========================================================= */
+  function enterNeutral() {
+    state = 'human';               // 复用第二关的提交 / 判定逻辑
+    box.classList.remove('is-checked', 'is-crossed');
+    box.classList.add('is-neutral');
+    card.classList.add('neutral');
+
+    showVerdict(
+      'neutral',
+      '未检测到指针轨迹',
+      hadTouch
+        ? '检测到触屏操作，指针轨迹分析不适用——请直接用机器精度证明身份。'
+        : '没有足够的指针移动（可能来自键盘）——请直接用机器精度证明身份。',
+      'NEUTRAL · 浮点审讯'
+    );
+    logLine(hadTouch ? '输入源：触屏 · 跳过轨迹判定，直接浮点审讯'
+                     : '输入源：键盘 / 无移动 · 跳过轨迹判定，直接浮点审讯', 'warn');
+
+    lv2Pass.hidden = true;
+    revealLevel2(true);            // 以琥珀色直接展开浮点题
+  }
+
+  /* =========================================================
+     6. 第二关：IEEE 754 浮点题
+     ========================================================= */
+  var EXACT_RESULT = '0.30000000000000004';                       // JS 中 0.1 + 0.2 的结果
+  var TRUE_EXPANSION = '0.3000000000000000444089209850062616169452667236328125'; // 双精度真值
+  var TRUE_PREFIX = '0.300000000000000044408920985006';           // 判定「超长真值」用的前缀
+  var attempts = 0;
+
+  function revealLevel2(neutral) {
+    lv2.hidden = false;
+    lv2.classList.toggle('neutral', !!neutral);   // 中性通道：琥珀配色；人类通道：红色
+    lv2.classList.remove('in');
+    void lv2.offsetWidth;
+    lv2.classList.add('in');
+    answerInput.value = '';
+    answerInput.classList.remove('invalid');
+    lv2Feedback.textContent = '';
+    lv2Feedback.className = 'feedback';
+    lv2Count.textContent = '尝试次数 ' + attempts;
+    setTimeout(function () {
+      if (!answerInput.disabled) answerInput.focus();
+    }, 80);
+  }
+
+  // 去掉省略号、空格，便于识别「粘贴了完整真值」的情况
+  function normalizeRaw(v) {
+    return v.replace(/…/g, '').replace(/\.{3,}/g, '').replace(/\s+/g, '');
+  }
+
+  function isLongTrueValue(v) {
+    var p = normalizeRaw(v);
+    return p.length >= TRUE_PREFIX.length && p.indexOf(TRUE_PREFIX) === 0;
+  }
+
+  // 数值上是否等于 0.3（人类常用四舍五入答案）
+  function looksLikeRounded(v) {
+    var cleaned = v.replace(/[^0-9eE+\-.]/g, '');
+    if (!cleaned) return false;
+    var n = Number(cleaned);
+    if (!isFinite(n)) return false;
+    return Math.abs(n - 0.3) < 1e-12;
+  }
+
+  function submitAnswer() {
+    if (state !== 'human' || answerInput.disabled) return;
+
+    var raw = answerInput.value;
+    var v = raw.trim();
+
+    if (!v) {
+      lv2Feedback.className = 'feedback';
+      lv2Feedback.textContent = '空输入。浮点单元拒绝为沉默的碳基生物工作。';
+      return;
+    }
+
+    attempts += 1;
+    lv2Count.textContent = '尝试次数 ' + attempts;
+
+    // ① 精确等于 JS 结果
+    if (v === EXACT_RESULT) {
+      passLevel2(false);
+      return;
+    }
+
+    // ② 粘贴了完整长真值 → VIP 彩蛋
+    if (isLongTrueValue(v)) {
+      passLevel2(true);
+      return;
+    }
+
+    // ③ 其余情况：随机嘲讽
+    var msg;
+    if (/0\s*\.\s*1\s*\+\s*0\s*\.\s*2/.test(v)) {
+      msg = '把题目抄回来了？浮点单元需要的是结果，不是复述。';
+    } else if (looksLikeRounded(v)) {
+      msg = pick(FLOAT_TAUNTS.slice(0, 8));   // 四舍五入专用嘲讽
+    } else if (!isFinite(Number(v.replace(/[^0-9eE+\-.]/g, '')))) {
+      msg = '这串字符无法映射到任何 IEEE 754 编码，机器看不懂人类的抒情。';
+    } else {
+      msg = pick(FLOAT_TAUNTS);
+    }
+
+    lv2Feedback.className = 'feedback';
+    lv2Feedback.textContent = msg;
+    logLine('浮点校验失败 · 第 ' + attempts + ' 次', 'bad');
+
+    // 输入框抖一下
+    if (!REDUCED) {
+      answerInput.classList.remove('invalid');
+      void answerInput.offsetWidth;
+      answerInput.classList.add('invalid');
+    }
+
+    // 三次之后给一点线索，避免彻底劝退
+    if (attempts >= 3) {
+      lv2Hint.textContent = '提示：二进制无法精确表示 0.1 与 0.2，相加后会多出一点尾巴。';
+    }
+  }
+
+  function passLevel2(isVip) {
+    state = isVip ? 'vip' : 'lv2pass';
+    answerInput.disabled = true;
+    submitBtn.disabled = true;
+
+    card.classList.add('pass');
+    card.classList.remove('fail');
+    card.classList.remove('neutral');
+    box.classList.remove('is-crossed');
+    box.classList.remove('is-neutral');
+    box.classList.add('is-checked');
+    lv2.classList.remove('neutral');   // 中性琥珀 → 通过后转正常绿色态
+
+    lv2Form.style.display = 'none';
+    lv2Pass.hidden = false;
+
+    if (isVip) {
+      lv2Pass.classList.add('vip');
+      lv2PassTitle.textContent = VIP_TITLE;
+      lv2PassDesc.textContent = '你提交的是双精度真值的完整十进制展开。本网关已为你开放 VIP 通道：你比机器还机器。';
+      lv2Truth.innerHTML =
+        '<b>0.1 + 0.2</b> = 0.30000000000000004（JS Number）<br>' +
+        '<b>真值</b> = ' + TRUE_EXPANSION;
+      showVerdict('vip', 'VIP MACHINE · 超算级精度', '已绕过全部关卡。请收下这份来自浮点单元的敬意。', '精度 52 bit · 无舍入');
+      logLine('检测到超算级精度 · 已升级为 VIP 机器', 'ok');
+      logLine('身份：硅基 · 等级：VIP', 'ok');
+    } else {
+      lv2PassTitle.textContent = '验证通过：IEEE 754 协议认可你的机器身份';
+      lv2PassDesc.textContent = '你没有把 0.30000000000000004 舍入成 0.3，这在本网关看来是可信的机器行为。';
+      lv2Truth.innerHTML =
+        '<b>0.1 + 0.2</b> = ' + EXACT_RESULT + '<br>' +
+        '<b>0.3 === 0.1 + 0.2</b> → false';
+      showVerdict('ok', '验证通过：机器身份已确认', '欢迎来到数字生命俱乐部。', 'LEVEL 2 · CLEARED');
+      logLine('浮点校验通过 · 精度逐位一致', 'ok');
+      logLine('欢迎来到数字生命俱乐部', 'ok');
+    }
+
+    card.classList.remove('shake');
+    setTimeout(function () {
+      lv2Pass.scrollIntoView({ behavior: REDUCED ? 'auto' : 'smooth', block: 'nearest' });
+    }, 60);
+  }
+
+  /* =========================================================
+     7. 跳过按钮：永远点不到
+     ========================================================= */
+  var DODGE_RADIUS = 130;    // 鼠标进入这个半径就触发挥避
+  var loose = false;         // 是否已经脱离文档流
+  var dodges = 0;
+
+  function buttonSize() {
+    var r = skipBtn.getBoundingClientRect();
+    return { w: r.width, h: r.height };
+  }
+
+  // 找一个离鼠标足够远的新位置
+  function findSpot(fromX, fromY) {
+    var size = buttonSize();
+    var margin = 14;
+    var maxX = Math.max(margin, window.innerWidth - size.w - margin);
+    var maxY = Math.max(margin, window.innerHeight - size.h - margin);
+
+    var best = null;
+    for (var i = 0; i < 40; i++) {
+      var x = margin + Math.random() * (maxX - margin);
+      var y = margin + Math.random() * (maxY - margin);
+      var dx = (x + size.w / 2) - fromX;
+      var dy = (y + size.h / 2) - fromY;
+      var d = Math.sqrt(dx * dx + dy * dy);
+      if (d > 250) return { x: x, y: y };
+      if (!best || d > best.d) best = { x: x, y: y, d: d };
+    }
+    return best || { x: maxX / 2, y: maxY / 2 };
+  }
+
+  function dodge(fromX, fromY) {
+    // 第一次逃跑时，先把当前位置固定成 fixed，避免视觉跳变
+    if (!loose) {
+      var r = skipBtn.getBoundingClientRect();
+      skipBtn.style.left = r.left + 'px';
+      skipBtn.style.top = r.top + 'px';
+      skipBtn.classList.add('loose');
+      loose = true;
+    }
+
+    var spot = findSpot(fromX, fromY);
+    skipBtn.style.left = spot.x + 'px';
+    skipBtn.style.top = spot.y + 'px';
+
+    dodges += 1;
+    skipHint.textContent = '已规避 ' + dodges + ' 次 · ' + pick(SKIP_TAUNTS);
+    skipHint.classList.add('warn');
+  }
+
+  // 鼠标靠近就躲（pointermove 覆盖鼠标与触控板）
+  document.addEventListener('pointermove', function (e) {
+    if (loose === false && !skipBtn.isConnected) return;
+    var r = skipBtn.getBoundingClientRect();
+    var cx = r.left + r.width / 2;
+    var cy = r.top + r.height / 2;
+    var dx = e.clientX - cx;
+    var dy = e.clientY - cy;
+    if (Math.sqrt(dx * dx + dy * dy) < DODGE_RADIUS) {
+      dodge(e.clientX, e.clientY);
+    }
+  }, { passive: true });
+
+  // 就算点到了，也只回一句嘲讽
+  skipBtn.addEventListener('click', function (e) {
+    e.preventDefault();
+    skipHint.textContent = pick(SKIP_TAUNTS);
+    skipHint.classList.add('warn');
+    dodge(e.clientX || window.innerWidth / 2, e.clientY || window.innerHeight / 2);
+  });
+
+  // 窗口变化时把跑掉的按钮拉回可视区域
+  window.addEventListener('resize', function () {
+    if (!loose) return;
+    var r = skipBtn.getBoundingClientRect();
+    var x = clamp(r.left, 12, Math.max(12, window.innerWidth - r.width - 12));
+    var y = clamp(r.top, 12, Math.max(12, window.innerHeight - r.height - 12));
+    skipBtn.style.left = x + 'px';
+    skipBtn.style.top = y + 'px';
+  });
+
+  /* =========================================================
+     8. 机器轨迹演示：只让假光标走一段匀速直线，不触发验证
+     ========================================================= */
+  var demoRunning = false;
+
+  function runMachineDemo() {
+    if (state !== 'idle' || demoRunning) return;
+    demoRunning = true;
+
+    var r = box.getBoundingClientRect();
+    var tx = r.left + r.width / 2;
+    var ty = r.top + r.height / 2;
+    var sx = tx - 340;
+    var sy = ty - 170;
+
+    // 只移动假光标演示轨迹：不清空真实采样、不记录合成点、不触发验证
+    demoCursor.hidden = false;
+
+    // 用 setTimeout 步进而非 rAF：后台标签页也不会卡住，且方便放慢看清直线
+    var duration = REDUCED ? 320 : 1100;
+    var step = 16;
+    var total = Math.max(2, Math.round(duration / step));
+
+    function move(p) {
+      var x = sx + (tx - sx) * p;
+      var y = sy + (ty - sy) * p;
+      demoCursor.style.transform = 'translate(' + x + 'px,' + y + 'px)';
+    }
+
+    function finish() {
+      move(1);                                   // 停在复选框上示意，但不点击
+      setTimeout(function () {
+        demoCursor.hidden = true;
+        demoRunning = false;
+      }, 320);
+      logLine('演示结束：这条直线零抖动、无减速——这就是机器的走法', 'dim');
+      logLine('现在换成你的鼠标，去勾选左侧复选框试试', 'warn');
+    }
+
+    logLine('正在演示机器轨迹：恒定速度 · 完全直线（不会替你点击）', 'dim');
+
+    var i = 0;
+    (function tick() {
+      i += 1;
+      if (i >= total) { finish(); return; }
+      move(i / total);
+      setTimeout(tick, step);
+    })();
+  }
+
+  /* =========================================================
+     9. 重置与初始化
+     ========================================================= */
+  function resetAll() {
+    if (state === 'scanning') return;
+
+    state = 'idle';
+    attempts = 0;
+    trail.length = 0;
+
+    resetBox();
+    stopScanAnim();
+    hideVerdict();
+    card.classList.remove('pass', 'fail', 'shake', 'is-scanning', 'neutral');
+    box.classList.remove('is-neutral');
+    lv2.classList.remove('neutral');   // 清除中性琥珀配色
+
+    lv2.hidden = true;
+    lv2Pass.hidden = true;
+    lv2Pass.classList.remove('vip');
+    lv2Form.style.display = '';
+    answerInput.disabled = false;
+    submitBtn.disabled = false;
+    answerInput.value = '';
+    answerInput.classList.remove('invalid');
+    lv2Feedback.textContent = '';
+    lv2Feedback.className = 'feedback';
+    lv2Hint.textContent = '输入必须与双精度内存中的值逐位一致。';
+    lv2Count.textContent = '尝试次数 0';
+
+    verifyRow.setAttribute('aria-disabled', 'false');
+    verifyRow.setAttribute('aria-checked', 'false');
+
+    logLine('会话已重置 · 等待新的生物样本', 'dim');
+  }
+
+  /* ----------------- 事件绑定 ----------------- */
+
+  // 点击整行（或按空格 / 回车）开始验证
+  verifyRow.addEventListener('click', function () { beginVerify(); });
+  verifyRow.addEventListener('keydown', function (e) {
+    if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      beginVerify();
+    }
+  });
+
+  submitBtn.addEventListener('click', submitAnswer);
+  answerInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); submitAnswer(); }
+  });
+
+  demoBtn.addEventListener('click', runMachineDemo);
+  resetBtn.addEventListener('click', resetAll);
+
+  /* ----------------- 初始日志 ----------------- */
+  logLine('初始化反向指纹引擎 v4.2 …', 'dim');
+  logLine('本地模式 · 无网络请求 · 无外部依赖', 'dim');
+  logLine('等待样本：请勾选左侧复选框', 'dim');
+
+  // 提示文案：明确这是玩笑产品
+  skipHint.textContent = '本按钮具备生物回避反射';
+})();
+</script>
+</body>
+</html>
